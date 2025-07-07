@@ -31,7 +31,7 @@ struct inst
 {
     u8 Opcode;
     u8 RegIsDest;
-    u8 IsWide;
+    u8 IsWord;
     u8 OpcodeMod;
     u8 Reg;
     u8 RorM;
@@ -49,7 +49,6 @@ void Win32_WriteFile(u8 *OutBuffer, SIZE_T OutBufferSize);
 void Win32_LoadInstStream(HANDLE FileHandle, struct inst_stream *InstStream);
 char *DisassembleInst(struct inst *Inst, struct inst_stream *InstStream, char *OutBufPtr);
 
-// stop: compiles but need to step thru
 int 
 main(int argc, char **argv)
 {
@@ -99,7 +98,7 @@ main(int argc, char **argv)
 	struct inst Inst;
 	Inst.Opcode = (u8)*InstPtr & OPCODE_FIELD;
 	Inst.RegIsDest = (u8)*InstPtr & REG_IS_DEST_FLAG;
-	Inst.IsWide = (u8)*InstPtr & WORD_FLAG;
+	Inst.IsWord = (u8)*InstPtr & WORD_FLAG;
 	Inst.OpcodeMod = (u8)((*InstPtr >> 8) & MOD_FIELD);
 	Inst.Reg = (u8)((*InstPtr >> 8) & REG_FIELD);
 	Inst.RorM = (u8)((*InstPtr >> 8) & R_OR_M_FIELD);
@@ -144,12 +143,9 @@ SteenLen(char *String)
 void
 SteenCopy(char *Dest, char *Source, SIZE_T NumBytes)
 {
-    char *DestPtr = Dest;
-    char *SourcePtr = Source;
-
     for(int i = 0; i < NumBytes; i++)
     {
-	*DestPtr++ = *SourcePtr++;
+	*Dest++ = *Source++;
     }
 }
 
@@ -280,7 +276,7 @@ DisassembleInst(struct inst *Inst, struct inst_stream *InstStream, char *OutBufP
     char *DestReg = ByteRegLUT[DestRegCode];
     u8 SourceRegCode = (Inst->Reg >> 3);
     char *SourceReg = ByteRegLUT[SourceRegCode];
-    if(Inst->IsWide & WORD_FLAG)
+    if(Inst->IsWord & WORD_FLAG)
     {
 	DestReg = WordRegLUT[DestRegCode];
 	SourceReg = WordRegLUT[SourceRegCode];
