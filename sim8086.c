@@ -10,31 +10,26 @@
 typedef uint8_t u8;
 typedef uint16_t u16;
 
-enum 
-{
-    OPCODE_FIELD = 0xFC,
-    REG_IS_DEST_FLAG = 0x02,
-    WORD_FLAG = 0x01,
-    MOD_FIELD = 0xC0,
-    REG_FIELD = 0x38,
-    R_OR_M_FIELD = 0x07
-} fields;
+#include "dispatch.c"
 
-struct inst_stream
+#define Assert(Expression) if(!Expression) {NULLPTR = 1;}
+
+struct istream
 {
     LARGE_INTEGER StreamSize;
     u8 *DoNotCrossThisLine;
-    u16 *Instructions;
+    u8 *Start;
 };
 
 struct inst
 {
+    u8 *Binary;
+    int Size;
     u8 Opcode;
-    u8 RegIsDest;
-    u8 IsWord;
-    u8 OpcodeMod;
-    u8 Reg;
-    u8 RorM;
+    char *OperandOne;
+    int OperandOneLen;
+    char *OperandTwo;
+    int OperandTwoLen;
 };
 
 char *ByteRegLUT[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
@@ -43,11 +38,12 @@ char *WordRegLUT[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
 u8 *Win32_ReadFile(HANDLE FileHandle);
 HANDLE Win32_OpenFile(LPCSTR FilePath);
 void Debug_OutputErrorMessage(char *ErrorMessage, char *CallingFunction, int Line);
-void SteenCopy(char *Dest, char *Source, SIZE_T NumBytes);
+char *SteenCopy(char *Dest, char *Source, SIZE_T NumBytes);
 SIZE_T SteenLen(char *String);
 void Win32_WriteFile(u8 *OutBuffer, SIZE_T OutBufferSize);
-void Win32_LoadInstStream(HANDLE FileHandle, struct inst_stream *InstStream);
-char *DisassembleInst(struct inst *Inst, struct inst_stream *InstStream, char *OutBufPtr);
+void Win32_LoadInstStream(HANDLE FileHandle, struct istream *IStream);
+char *DisassembleInst(struct inst *Inst, struct istream *IStream, char *OutBufPtr);
+int DecodeMnemonic(u8 FirstByte);
 
 int 
 main(int argc, char **argv)
@@ -60,41 +56,48 @@ main(int argc, char **argv)
 
     LPCSTR FilePath = argv[1];
     HANDLE FileHandle = Win32_OpenFile(FilePath);
-    struct inst_stream InstStream = {};
+    struct istream IStream = {};
     
-    Win32_LoadInstStream(FileHandle, &InstStream);
-    u16 *InstPtr = InstStream.Instructions;
-    SIZE_T NumInstructions = 0;
-
-    while((u8 *)InstPtr < InstStream.DoNotCrossThisLine)
-    {
-	if(*InstPtr)
-	{
-	    NumInstructions++;
-	    InstPtr++;
-	}
-	else
-	{
-	    Debug_OutputErrorMessage("Error: Read empty instruction", __func__, __LINE__);
-	    exit(1);
-	}
-    }
-
-    InstPtr = InstStream.Instructions;
+    Win32_LoadInstStream(FileHandle, &IStream);
+    u8 *IP = IStream.Start;
 
     char *Directive = "bits 16\n\n";
     HANDLE HeapHandle = GetProcessHeap();
-    char *OutBuf = (char *)HeapAlloc(HeapHandle, HEAP_ZERO_MEMORY, 100000);
+    char *OutBuf = (char *)HeapAlloc(HeapHandle, HEAP_ZERO_MEMORY, 1000);
     char *OutBufPtr = OutBuf;
-    char *OutBuf_DoNotCross = OutBuf + 100000;
+    char *OutBuf_DoNotCross = OutBuf + 1000;
     
     // write directive
     SIZE_T DirectiveLen = SteenLen(Directive);
     SteenCopy(OutBufPtr, Directive, DirectiveLen);
     OutBufPtr += DirectiveLen;
 
-    for(int i = 0; i < NumInstructions; i++)
+    while(IP < IStream.DoNotCrossThisLine) 
     {
+	struct inst Inst = {0};
+	Inst.Binary = IP;
+
+	Inst.Opcode = OpcodeLUT[Inst.Binary[0]];
+	if(Inst.Opcode == EXTENDED)
+	{
+	    Inst.Opcode = ReadExtendedOpcode(&Inst);
+	}
+
+	switch(Inst.Opcode)
+	{
+	    // Disassemble functions always return updated
+	    //	  OutBufPtr
+
+	    case MOV:
+	    {
+		OutBufPtr = DisassembleMOV(
+	    }
+	}
+
+	
+
+
+	
 	struct inst Inst;
 	Inst.Opcode = (u8)*InstPtr & OPCODE_FIELD;
 	Inst.RegIsDest = (u8)*InstPtr & REG_IS_DEST_FLAG;
@@ -109,13 +112,15 @@ main(int argc, char **argv)
 	    exit(1);
 	}
 	// DisassembleInst passes back OutBufPtr
-	OutBufPtr = DisassembleInst(&Inst, &InstStream, OutBufPtr);
-	if(i != (NumInstructions - 1))
+	OutBufPtr = DisassembleInst(&Inst, &IStream, OutBufPtr);
+	if(i != (NumStart - 1))
 	{
 	    *OutBufPtr = '\n';
 	    OutBufPtr++;
 	}
 	InstPtr++;
+
+
     }
     SIZE_T OutFileSize = (OutBufPtr - OutBuf);
 
@@ -140,13 +145,15 @@ SteenLen(char *String)
 }
 
 
-void
+char *
 SteenCopy(char *Dest, char *Source, SIZE_T NumBytes)
 {
     for(int i = 0; i < NumBytes; i++)
     {
 	*Dest++ = *Source++;
     }
+
+    return(Dest);
 }
 
 HANDLE 
@@ -164,27 +171,27 @@ Win32_OpenFile(LPCSTR FilePath)
 }
 
 void
-Win32_LoadInstStream(HANDLE FileHandle, struct inst_stream *InstStream)
+Win32_LoadInstStream(HANDLE FileHandle, struct istream *IStream)
 {
     if(FileHandle)
     {
-	GetFileSizeEx(FileHandle, &InstStream->StreamSize);
-	if(InstStream->StreamSize.QuadPart)
+	GetFileSizeEx(FileHandle, &IStream->StreamSize);
+	if(IStream->StreamSize.QuadPart)
 	{
 	    HANDLE HeapHandle = GetProcessHeap();
 	    if(HeapHandle)
 	    {
-		InstStream->Instructions = (u16 *)HeapAlloc(HeapHandle, HEAP_ZERO_MEMORY, 
-					     (SIZE_T)InstStream->StreamSize.LowPart);
-		if(InstStream->Instructions)
+		IStream->Start = (u8 *)HeapAlloc(HeapHandle, HEAP_ZERO_MEMORY, 
+					     (SIZE_T)IStream->StreamSize.LowPart);
+		if(IStream->Start)
 		{
 		    DWORD BytesRead = 0;
-		    BOOL Result = ReadFile(FileHandle, InstStream->Instructions, 
-					    InstStream->StreamSize.LowPart, &BytesRead, 0);
-		    if((BytesRead == InstStream->StreamSize.LowPart) && Result)
+		    BOOL Result = ReadFile(FileHandle, IStream->Start, 
+					    IStream->StreamSize.LowPart, &BytesRead, 0);
+		    if((BytesRead == IStream->StreamSize.LowPart) && Result)
 		    {
-			InstStream->DoNotCrossThisLine = ((u8 *)InstStream->Instructions +
-						    InstStream->StreamSize.LowPart);
+			IStream->DoNotCrossThisLine = ((u8 *)IStream->Start +
+						    IStream->StreamSize.LowPart);
 		    }
 		    else
 		    {
@@ -256,39 +263,461 @@ Debug_OutputErrorMessage(char *ErrorMessage, char *CallingFunction, int Line)
     OutputDebugStringA(".\n\n");
 }
 
-char *
-DisassembleInst(struct inst *Inst, struct inst_stream *InstStream, char *OutBufPtr)
+u8
+ReadExtendedOpcode(struct inst *Inst)
 {
-    if( (Inst->Opcode != 0x88) || (Inst->OpcodeMod != 0xC0) || 
-		(Inst->RegIsDest == REG_IS_DEST_FLAG) )
-    {
-	Debug_OutputErrorMessage("Error: Unrecognized opcode", __func__, __LINE__);
-	exit(1);
-    }
+    u8 FirstByte = Inst->Binary[0];
+    u8 MeetTheDistinguisher = 0x38; //0011 1000
+    u8 IHaveMetTheDistinguisher = Inst->Binary[1] & MeetTheDistinguisher;
 
-    char *Opcode = "mov ";
-    SIZE_T OpcodeLen = SteenLen(Opcode);
-    SteenCopy(OutBufPtr, Opcode, OpcodeLen);
+    switch(FirstByte)
+    {
+	case 0x80:
+	case 0x81:
+	{
+	    switch(IHaveMetTheDistinguisher)
+	    {
+		case 0x00: // 000
+		{
+		    return(ADD);
+		} break;
+
+		case 0x08: // 001
+		{
+		    return(OR);
+		} break;
+
+		case 0x10: // 010
+		{
+		    return(ADC);
+		} break;
+
+		case 0x18: // 011
+		{
+		    return(SBB);
+		} break;
+
+		case 0x20: // 100
+		{
+		    return(AND);
+		} break;
+
+		case 0x28: // 101
+		{
+		    return(SUB);
+		} break;
+
+		case 0x30: // 110
+		{
+		    return(XOR);
+		} break;
+
+		case 0x38: // 111
+		{
+		    return(CMP);
+		} break;
+
+		default:
+		{
+		    exit(1);
+		} break;
+	    }
+	} break;
+
+	case 0x82:
+	{
+	    switch(IHaveMetTheDistinguisher)
+	    {
+		case 0x00: // 000
+		{
+		    return(ADD);
+		} break;
+
+		case 0x10: // 010
+		{
+		    return(ADC);
+		} break;
+
+		case 0x18: // 011
+		{
+		    return(SBB);
+		} break;
+
+		case 0x28: // 101
+		{
+		    return(SUB);
+		} break;
+
+		case 0x38: // 111
+		{
+		    return(CMP);
+		} break;
+
+		default:
+		{
+		    exit(1);
+		} break;
+	    }
+	} break;
+
+	case 0x83:
+	{
+	    switch(IHaveMetTheDistinguisher)
+	    {
+		case 0x00: // 000
+		{
+		    return(ADD);
+		} break;
+
+		case 0x10: // 010
+		{
+		    return(ADC);
+		} break;
+
+		case 0x18: // 011
+		{
+		    return(SBB);
+		} break;
+
+		case 0x28: // 101
+		{
+		    return(SUB);
+		} break;
+
+		case 0x38: // 111
+		{
+		    return(CMP);
+		} break;
+
+		default:
+		{
+		    exit(1);
+		} break;
+	    }
+	} break;
+
+	case 0xD0:
+	case 0xD1:
+	case 0xD2:
+	case 0xD3:
+	{
+	    switch(IHaveMetTheDistinguisher)
+	    {
+		case 0x00: // 000
+		{
+		    return(ROL);
+		} break;
+
+		case 0x08: // 001
+		{
+		    return(ROR);
+		} break;
+
+		case 0x10: // 010
+		{
+		    return(RCL);
+		} break;
+
+		case 0x18: // 011
+		{
+		    return(RCR);
+		} break;
+
+		case 0x20: // 100
+		{
+		    return(SALorSHL);
+		} break;
+
+		case 0x28: // 101
+		{
+		    return(SHR);
+		} break;
+
+		case 0x38: // 111
+		{
+		    return(SAR);
+		} break;
+
+		default:
+		{
+		    exit(1);
+		} break;
+	    }
+	} break;
+
+	case 0xF6:
+	case 0xF7:
+	{
+	    switch(IHaveMetTheDistinguisher)
+	    {
+		case 0x00: // 000
+		{
+		    return(TEST);
+		} break;
+
+		case 0x10: // 010
+		{
+		    return(NOT);
+		} break;
+
+		case 0x18: // 011
+		{
+		    return(NEG);
+		} break;
+
+		case 0x20: // 100
+		{
+		    return(MUL);
+		} break;
+
+		case 0x28: // 101
+		{
+		    return(IMUL);
+		} break;
+
+		case 0x30: // 110
+		{
+		    return(DIV);
+		} break;
+
+		case 0x38: // 111
+		{
+		    return(IDIV);
+		} break;
+
+		default:
+		{
+		    exit(1);
+		} break;
+	    }
+	} break;
+
+	case 0xFE:
+	{
+	    switch(IHaveMetTheDistinguisher)
+	    {
+		case 0x00: // 000
+		{
+		    return(INC);
+		} break;
+
+		case 0x10: // 010
+		{
+		    return(DEC);
+		} break;
+
+		default:
+		{
+		    exit(1);
+		} break;
+	    }
+	} break;
+
+	case 0xFF:
+	{
+	    switch(IHaveMetTheDistinguisher)
+	    {
+		case 0x00: // 000
+		{
+		    return(INC);
+		} break;
+
+		case 0x08: // 001
+		{
+		    return(DEC);
+		} break;
+
+		case 0x10: // 010
+		case 0x18: // 011
+		{
+		    return(CALL);
+		} break;
+
+		case 0x20: // 100
+		case 0x28: // 101
+		{
+		    return(JMP);
+		} break;
+
+		case 0x30: // 110
+		{
+		    return(PUSH);
+		} break;
+
+		default:
+		{
+		    exit(1);
+		} break;
+	    }
+	} break;
+
+	default:
+	{
+	    exit(1);
+	} break;
+    }
+}
+
+/*char **/
+/*DisassembleInst(struct inst *Inst, struct istream *IStream, char *OutBufPtr)*/
+/*{*/
+/*    if( (Inst->Opcode != 0x88) || (Inst->OpcodeMod != 0xC0) || */
+/*		(Inst->RegIsDest == REG_IS_DEST_FLAG) )*/
+/*    {*/
+/*	Debug_OutputErrorMessage("Error: Unrecognized opcode", __func__, __LINE__);*/
+/*	exit(1);*/
+/*    }*/
+/**/
+/*    char *Opcode = "mov ";*/
+/*    SIZE_T OpcodeLen = SteenLen(Opcode);*/
+/*    SteenCopy(OutBufPtr, Opcode, OpcodeLen);*/
+/*    OutBufPtr += OpcodeLen;*/
+/**/
+/*    // write operands*/
+/*    u8 DestRegCode = Inst->RorM;*/
+/*    char *DestReg = ByteRegLUT[DestRegCode];*/
+/*    u8 SourceRegCode = (Inst->Reg >> 3);*/
+/*    char *SourceReg = ByteRegLUT[SourceRegCode];*/
+/*    if(Inst->IsWord & WORD_FLAG)*/
+/*    {*/
+/*	DestReg = WordRegLUT[DestRegCode];*/
+/*	SourceReg = WordRegLUT[SourceRegCode];*/
+/*    }*/
+/*    SteenCopy(OutBufPtr, DestReg, REGISTER_NAME_LEN);*/
+/*    OutBufPtr += REGISTER_NAME_LEN;*/
+/**/
+/*    *OutBufPtr++ = ',';*/
+/*    *OutBufPtr++ = ' ';*/
+/**/
+/*    SteenCopy(OutBufPtr, SourceReg, REGISTER_NAME_LEN);*/
+/*    OutBufPtr += REGISTER_NAME_LEN;*/
+/**/
+/*    return(OutBufPtr);*/
+/*}*/
+
+u8 *
+DisassembleMov(struct inst *Inst, u8 *OutBufPtr)
+{
+    OpcodeLen = SteenLen("mov ");
+    SteenCopy(OutBufPtr, "mov ", OpcodeLen);
     OutBufPtr += OpcodeLen;
+    u8 ByteOne = Inst->Binary[0];
+    u8 ByteTwo = Inst->Binary[1];
 
-    // write operands
-    u8 DestRegCode = Inst->RorM;
-    char *DestReg = ByteRegLUT[DestRegCode];
-    u8 SourceRegCode = (Inst->Reg >> 3);
-    char *SourceReg = ByteRegLUT[SourceRegCode];
-    if(Inst->IsWord & WORD_FLAG)
+    enum
     {
-	DestReg = WordRegLUT[DestRegCode];
-	SourceReg = WordRegLUT[SourceRegCode];
+	MEMorREG_TOorFROM_REG = 0x88,
+	IMM_TO_REGorMEM = 0xC6,
+	IMM_TO_REG = 0xB0,
+	MEM_TO_ACCUM = 0xA0,
+	ACCUM_TO_MEM = 0xA2,
+	REGorMEM_TO_SEGREG = 0x8E,
+	SEGREG_TO_REGorMEM = 0x8C
+    };
+
+    enum
+    {
+	MOD_FIELD = 0xC0,
+	FLEX_FIELD = 0x38, // very flexible field
+	RorM_FIELD = 0x03
+    };
+
+    switch(ByteOne)
+    {
+	case MEMorREG_TOorFROM_REG:
+	case (MEMorREG_TOorFROM_REG + 1): // if Word flag is set
+	{
+	    struct
+	    {
+		u8 RegIsDest;
+		u8 IsWord;
+		u8 OpcodeMod;
+		u8 Reg;
+		u8 RorM;
+	    } DecodedInst;
+
+	    DecodedInst.RegIsDest = (ByteOne & 0x02);
+	    DecodedInst.IsWord = (ByteOne & 0x01);
+	    DecodedInst.OpcodeMod = (ByteTwo & MOD_FIELD);
+	    DecodedInst.Reg = (ByteTwo & REG_FIELD);
+	    DecodedInst.RorM = (ByteTwo & R_OR_M_FIELD);
+
+	    if(DecodedInst.OpcodeMod == 0x00) // MOD == 00
+	    {
+		if(DecodedInst.RorM == 0x06) // Special case: Direct address
+		{
+		    if(IsWord)
+		    {
+			Inst->OperandOne = WordRegLUT[DecodedInst.Reg];
+		    }
+		    else
+		    {
+			Inst->OperandOne = ByteRegLUT[DecodedInst.Reg];
+		    }
+		    Inst->OperandOneLen = REGISTER_NAME_LEN;
+
+		    char AddressBuffer[MAX_STRING_LEN];
+		    int BytesPrinted = sprintf_s(AddressBuffer, sizeof(AddressBuffer), "0x%x", (u16)Inst->Binary[2]);
+		    OperandTwo = AddressBuffer;
+		    OperandTwoLen = BytesPrinted;
+		}
+		
+		if(RegIsDest)
+		{
+		    //stop i am tired....
+		    
+		}
+		
+	    }
+	    else if(CheckMODField == 0x04) // 01
+	    {
+
+
+
+
+	    }
+	    else if(CheckMODField == 0x80) // 10
+	    {
+
+	    }
+	    else if(CheckMODField == 0xC0) // 11
+	    {
+		u8 DestField = ByteTwo & RorM_FIELD;
+		u8 SourceField = ByteTwo & AUXILARY_FIELD;
+
+		u8 IsWord = (ByteOne & 0x01);
+		if(IsWord)
+		{
+		    OperandOne = WordRegLUT[DestField];
+		    OperandTwo = WordRegLUT[SourceField];
+		}
+		else
+		{
+		    OperandOne = ByteRegLUT[DestField];
+		    OperandTwo = ByteRegLUT[SourceField];
+		}
+	    }
+	    else
+	    {
+		// Error
+		exit(1);
+	    }
+
+
+	    
+	} break;
+
+	case IMM_TO_REGorMEM:
+	case IMM_TO_REGorMEM + 1: // if Word flag is set
+	{
+
+	}
+
+
+	default:
+	{
+	    // ERROR
+	    // stop: in the middle of writing this function
+	} break;
     }
-    SteenCopy(OutBufPtr, DestReg, REGISTER_NAME_LEN);
-    OutBufPtr += REGISTER_NAME_LEN;
-
-    *OutBufPtr++ = ',';
-    *OutBufPtr++ = ' ';
-
-    SteenCopy(OutBufPtr, SourceReg, REGISTER_NAME_LEN);
-    OutBufPtr += REGISTER_NAME_LEN;
-
-    return(OutBufPtr);
 }
