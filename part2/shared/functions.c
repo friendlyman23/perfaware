@@ -149,81 +149,23 @@ AllocateBuffer(size_t NumBytes)
     }
 }
 
-#if 0
-void
-ValidateJsonAndSetCursor(struct json *Json)
+static void
+DebugOutput(const char *Format, ...)
 {
-    char *StartComparison = "{\"pairs\":[\n";    
-    size_t StartComparisonSize = strlen(StartComparison);
-    if(strncmp(StartComparison, (const char *)Json->Start, StartComparisonSize) != 0)
-    {
-        OutputErrorMessage("%s did not contain valid json", Json->Filename);
-        exit(1);
-    }
-    const char *CheckEnd = (const char *)Json->Start + Json->Size - 3;
-    char *EndComparison = "]}\n";
-    size_t EndComparisonSize = strlen(EndComparison);
-    if(strncmp(EndComparison, (const char *)CheckEnd, EndComparisonSize) != 0)
-    {
-        OutputErrorMessage("%s did not contain valid json", Json->Filename);
-        exit(1);
-    }
+    char PrintBuffer[512];
+    int PrintBufferSize = sizeof(PrintBuffer);
 
-    Json->Cursor = (char *)Json->Start + StartComparisonSize;
+    va_list Args;
+    va_start(Args, Format);
+    int BytesWritten = vsnprintf(PrintBuffer, PrintBufferSize, Format, Args);
+    va_end(Args);
+
+    if(BytesWritten > PrintBufferSize)
+    {
+        OutputDebugStringA("\n\nERROR: DebugOutput function format string did not fit in print buffer\n\n");
+    }
+    OutputDebugStringA(PrintBuffer);
+    OutputDebugStringA("\n");
+
+    return;
 }
-
-bool32
-Parse(struct json *Json, u64 *PairCount, f64 *Accumulator)
-{
-    // const char *Cursor = Json->Cursor;
-    struct pair Pair = {0};
-
-    const char *ComparisonForX0 = "{\"x0\":";
-    size_t X0PrefixLen = strlen(ComparisonForX0);
-    Assert( strncmp(Json->Cursor, ComparisonForX0, X0PrefixLen) == 0 );
-    Json->Cursor += X0PrefixLen;
-    Pair.X0 = strtod(Json->Cursor, (char **)&Json->Cursor);
-
-    const char *ComparisonForY0 = ", \"y0\":";
-    size_t Y0PrefixLen = strlen(ComparisonForY0);
-    Assert( strncmp(Json->Cursor, ComparisonForY0, Y0PrefixLen) == 0 );
-    Json->Cursor += Y0PrefixLen;
-    Pair.Y0 = strtod(Json->Cursor, (char **)&Json->Cursor);    
-
-    const char *ComparisonForX1 = ", \"x1\":";
-    size_t X1PrefixLen = strlen(ComparisonForX1);
-    Assert( strncmp(Json->Cursor, ComparisonForX1, X1PrefixLen) == 0 );
-    Json->Cursor += X1PrefixLen;
-    Pair.X1 = strtod(Json->Cursor, (char **)&Json->Cursor);    
-
-    const char *ComparisonForY1 = ", \"y1\":";
-    size_t Y1PrefixLen = strlen(ComparisonForY1);
-    Assert( strncmp(Json->Cursor, ComparisonForY1, Y1PrefixLen) == 0 );
-    Json->Cursor += Y1PrefixLen;
-    Pair.Y1 = strtod(Json->Cursor, (char **)&Json->Cursor);    
-
-    const char *PairSuffix = "},\n";
-    size_t PairSuffixLen = strlen(PairSuffix);
-    const char *LastPairSuffix = "}\n";
-    size_t LastPairSuffixLen = strlen(LastPairSuffix);
-
-    *Accumulator += Haversine(Pair);
-
-    if(strncmp(Json->Cursor, PairSuffix, PairSuffixLen) == 0)
-    {
-        Json->Cursor += PairSuffixLen;
-        ++*PairCount;
-        return(True);
-    }
-    else if(strncmp(Json->Cursor, LastPairSuffix, LastPairSuffixLen) == 0)
-    {
-        ++*PairCount;
-        return(False);
-    }
-    else
-    {
-        OutputErrorMessage("Unable to parse line ending for pair %d", PairCount);
-        exit(1);
-    }
-}
-#endif

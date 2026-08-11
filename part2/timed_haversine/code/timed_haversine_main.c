@@ -1,8 +1,33 @@
+// Function which estimates CPU frequency
+//
+// Output should look like this:
+//      Input size: 1125484600
+//      Pair count: 10000000
+//      Haversine sum: 4519.9968985727073232
+//
+//      Total time: 9096.2338ms (CPU freq 4200224880)
+//          Startup: 42 (0.00%)
+//          Read: 1247842044 (3.27%)
+//          MiscSetup: 86118 (0.00%)
+//          Parse: 35064925236 (91.78%)
+//          Sum: 1614093308 (4.22%)
+//          MiscOutput: 279280471 (0.73%)
+//
+//  Go one by one and see how we get each metric:
+//
+//      Total time: 9096.2338ms
+//          Peformance frequency is going to be 10MHz = 10,000,000 ticks per second
+//
+//          10,000,000 ticks
+//          ---------------    x        what       = 9096.2338ms?
+//              1 second
+//          
 #define _CRT_SECURE_NO_WARNINGS
 
 #include <sys/stat.h>
 #include "common.h"
 #include "json_parser.c"
+#include "platform_metrics.c"
 
 struct buffer 
 ReadEntireFile(char *FileName)
@@ -42,7 +67,7 @@ ReadEntireFile(char *FileName)
     return Result;
 }
 
-void
+static void
 InitInputJson(struct json *Json)
 {
     if(Json->JsonToParse.NumBytes > GIGABYTES(2))
@@ -66,7 +91,7 @@ InitInputJson(struct json *Json)
     fclose(Json->FilePointer);
 }
 
-u64
+static u64
 ParseHaversinePairs(struct buffer *HaversinePairs, struct json *Json, u64 MaxPairCount)
 {
     // Definitions:
@@ -103,7 +128,7 @@ ParseHaversinePairs(struct buffer *HaversinePairs, struct json *Json, u64 MaxPai
     return(PairCount);
 }
 
-f64
+static f64
 SumHaversineDistances(u64 PairCount, struct buffer *HaversinePairsBuffer)
 {
     struct haversine_pair *Pairs = (struct haversine_pair *)HaversinePairsBuffer->Data;
@@ -123,6 +148,10 @@ SumHaversineDistances(u64 PairCount, struct buffer *HaversinePairsBuffer)
 int
 main(int ArgCount, char **ArgVector)
 {
+    u64 StartupStart = ReadCpuTimer();
+    u64 OsFreq = GetOsTimerFreq();
+    u64 OsStart = ReadOsTimer();
+
     // Check usage
     if(!((ArgCount == 2) || (ArgCount == 3)))
     {
@@ -141,9 +170,14 @@ main(int ArgCount, char **ArgVector)
     // Init json
     struct json Json;
     Json.Filename = Filename;
+    u64 StartupEnd = ReadCpuTimer();
+
+    u64 ReadStart = ReadCpuTimer();
     OpenJson(&Json);
     InitInputJson(&Json);
+    u64 ReadEnd = ReadCpuTimer();
 
+    u64 MiscSetupStart = ReadCpuTimer();
     // Validate json
     u32 MinBytesForJsonPair = 6 * 4;
     u64 MaxPairCount = Json.JsonToParse.NumBytes / MinBytesForJsonPair;
@@ -155,14 +189,21 @@ main(int ArgCount, char **ArgVector)
 
     // Alloc pairs memory
     struct buffer HaversinePairs = AllocateBuffer(sizeof(struct haversine_pair) * MaxPairCount);
+    u64 MiscSetupEnd = ReadCpuTimer();
 
+    u64 ParseStart = ReadCpuTimer();
     // Parse
     u64 JsonPairCount = ParseHaversinePairs(&HaversinePairs, &Json, MaxPairCount);
+    u64 ParseEnd = ReadCpuTimer();
 
     // Compute
+    
+    u64 SumStart = ReadCpuTimer();
     f64 JsonSum = SumHaversineDistances(JsonPairCount, &HaversinePairs);
     f64 JsonAverage = JsonSum / (f64)JsonPairCount;
+    u64 SumEnd = ReadCpuTimer();
 
+    u64 MiscOutputStart = ReadCpuTimer();
     DebugOutput("\n\n");
     DebugOutput("Input size: %llu", Json.JsonToParse.NumBytes);
     DebugOutput("Pair count: %llu", JsonPairCount);
@@ -202,8 +243,40 @@ main(int ArgCount, char **ArgVector)
         DebugOutput("\n\n");
     }
 
+    u64 OsEnd = ReadOsTimer();
+    u64 MiscOutputEnd = ReadCpuTimer();
+
     if(HaversinePairs.Data) free((void *)HaversinePairs.Data);
     if(Json.JsonToParse.Data) free((void *)Json.JsonToParse.Data);
+
+    u64 OsElapsed = OsEnd - OsStart;
+
+    u64 StartupElapsed = StartupEnd - StartupStart;
+    u64 ReadElapsed = ReadEnd - ReadStart;
+    u64 MiscSetupElapsed = MiscSetupEnd - MiscSetupStart;
+    u64 ParseElapsed = ParseEnd - ParseStart;
+    u64 SumElapsed = SumEnd - SumStart;
+    u64 MiscOutputElapsed = MiscOutputEnd - MiscOutputStart;
+    u64 TotalCpuElapsed = MiscOutputEnd - StartupStart;
+    
+    u64 CpuFreq = GuessCpuFreq(OsFreq, OsElapsed, TotalCpuElapsed);
+
+    f64 TotalTime = (f64)OsElapsed / (f64)OsFreq;
+    f64 StartupRatio = (f64)StartupElapsed / (f64)TotalCpuElapsed;
+    f64 ReadRatio = (f64)ReadElapsed / (f64)TotalCpuElapsed;
+    f64 MiscSetupRatio = (f64)MiscSetupElapsed / (f64)TotalCpuElapsed;
+    f64 ParseRatio = (f64)ParseElapsed / (f64)TotalCpuElapsed;
+    f64 SumRatio = (f64)SumElapsed / (f64)TotalCpuElapsed;
+    f64 MiscOutputRatio = (f64)MiscOutputElapsed / (f64)TotalCpuElapsed;
+
+    DebugOutput("Total time: %.2fms (CPU freq %llu)", TotalTime * 1000, CpuFreq);
+    DebugOutput("    Startup: %llu, (%.2f%)", StartupElapsed, StartupRatio * 100);
+    DebugOutput("    Read: %llu, (%.2f%)", ReadElapsed, ReadRatio * 100);
+    DebugOutput("    MiscSetup: %llu, (%.2f%)", MiscSetupElapsed, MiscSetupRatio * 100);
+    DebugOutput("    Parse: %llu, (%.2f%)", ParseElapsed, ParseRatio * 100);
+    DebugOutput("    Sum: %llu, (%.2f%)", SumElapsed, SumRatio * 100);
+    DebugOutput("    MiscOutput: %llu, (%.2f%)", MiscOutputElapsed, MiscOutputRatio * 100);
+    DebugOutput("\n\n");
 
     return(0);
 }
