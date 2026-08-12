@@ -148,10 +148,7 @@ SumHaversineDistances(u64 PairCount, struct buffer *HaversinePairsBuffer)
 int
 main(int ArgCount, char **ArgVector)
 {
-    u64 StartupStart = ReadCpuTimer();
-    u64 OsFreq = GetOsTimerFreq();
-    u64 OsStart = ReadOsTimer();
-
+    u64 Prof_Begin = ReadCpuTimer();
     // Check usage
     if(!((ArgCount == 2) || (ArgCount == 3)))
     {
@@ -170,14 +167,12 @@ main(int ArgCount, char **ArgVector)
     // Init json
     struct json Json;
     Json.Filename = Filename;
-    u64 StartupEnd = ReadCpuTimer();
 
-    u64 ReadStart = ReadCpuTimer();
+    u64 Prof_Read = ReadCpuTimer();
     OpenJson(&Json);
     InitInputJson(&Json);
-    u64 ReadEnd = ReadCpuTimer();
 
-    u64 MiscSetupStart = ReadCpuTimer();
+    u64 Prof_MiscSetup = ReadCpuTimer();
     // Validate json
     u32 MinBytesForJsonPair = 6 * 4;
     u64 MaxPairCount = Json.JsonToParse.NumBytes / MinBytesForJsonPair;
@@ -189,28 +184,23 @@ main(int ArgCount, char **ArgVector)
 
     // Alloc pairs memory
     struct buffer HaversinePairs = AllocateBuffer(sizeof(struct haversine_pair) * MaxPairCount);
-    u64 MiscSetupEnd = ReadCpuTimer();
 
-    u64 ParseStart = ReadCpuTimer();
     // Parse
+    u64 Prof_Parse = ReadCpuTimer();
     u64 JsonPairCount = ParseHaversinePairs(&HaversinePairs, &Json, MaxPairCount);
-    u64 ParseEnd = ReadCpuTimer();
 
     // Compute
-    
-    u64 SumStart = ReadCpuTimer();
+    u64 Prof_Sum = ReadCpuTimer();
     f64 JsonSum = SumHaversineDistances(JsonPairCount, &HaversinePairs);
     f64 JsonAverage = JsonSum / (f64)JsonPairCount;
-    u64 SumEnd = ReadCpuTimer();
 
-    u64 MiscOutputStart = ReadCpuTimer();
+    u64 Prof_MiscOutput = ReadCpuTimer();
     DebugOutput("\n\n");
     DebugOutput("Input size: %llu", Json.JsonToParse.NumBytes);
     DebugOutput("Pair count: %llu", JsonPairCount);
     DebugOutput("Haversine sum: %.16f", JsonSum);
 
     // Validate computation
-
     DebugOutput("Avg. Haversine for json pairs: %.16f\n", JsonAverage);
     if(ArgCount == 3)
     {
@@ -243,25 +233,22 @@ main(int ArgCount, char **ArgVector)
         DebugOutput("\n\n");
     }
 
-    u64 OsEnd = ReadOsTimer();
-    u64 MiscOutputEnd = ReadCpuTimer();
+    u64 Prof_End = ReadCpuTimer();
 
     if(HaversinePairs.Data) free((void *)HaversinePairs.Data);
     if(Json.JsonToParse.Data) free((void *)Json.JsonToParse.Data);
 
-    u64 OsElapsed = OsEnd - OsStart;
+    u64 CpuFreq = GuessCpuFreq();
 
-    u64 StartupElapsed = StartupEnd - StartupStart;
-    u64 ReadElapsed = ReadEnd - ReadStart;
-    u64 MiscSetupElapsed = MiscSetupEnd - MiscSetupStart;
-    u64 ParseElapsed = ParseEnd - ParseStart;
-    u64 SumElapsed = SumEnd - SumStart;
-    u64 MiscOutputElapsed = MiscOutputEnd - MiscOutputStart;
-    u64 TotalCpuElapsed = MiscOutputEnd - StartupStart;
+    u64 StartupElapsed = Prof_Read - Prof_Begin;
+    u64 ReadElapsed = Prof_MiscSetup - Prof_Read;
+    u64 MiscSetupElapsed = Prof_Parse - Prof_MiscSetup;
+    u64 ParseElapsed = Prof_Sum - Prof_Parse;
+    u64 SumElapsed = Prof_MiscOutput - Prof_Sum;
+    u64 MiscOutputElapsed = Prof_End - Prof_MiscOutput;
+    u64 TotalCpuElapsed = Prof_End - Prof_Begin;
     
-    u64 CpuFreq = GuessCpuFreq(OsFreq, OsElapsed, TotalCpuElapsed);
-
-    f64 TotalTime = (f64)OsElapsed / (f64)OsFreq;
+    f64 TotalTime = (f64)TotalCpuElapsed / (f64)CpuFreq;
     f64 StartupRatio = (f64)StartupElapsed / (f64)TotalCpuElapsed;
     f64 ReadRatio = (f64)ReadElapsed / (f64)TotalCpuElapsed;
     f64 MiscSetupRatio = (f64)MiscSetupElapsed / (f64)TotalCpuElapsed;
